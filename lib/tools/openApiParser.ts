@@ -2,7 +2,7 @@ import OpenAPIParser from "@readme/openapi-parser";
 import type { OpenAPIV3 } from "openapi-types";
 import type { Tool as ToolDb } from "@/db/schema/tools";
 
-type Tool = Omit<ToolDb, "id" | "createdAt" | "updatedAt" | "mailboxId" | "toolApiId">;
+type Tool = Omit<ToolDb, "id" | "createdAt" | "updatedAt" | "toolApiId">;
 type ToolParameters = Tool["parameters"];
 type HttpMethod = "get" | "post" | "put" | "delete";
 
@@ -116,7 +116,9 @@ const createTool = (
   authenticationToken: apiToken,
   enabled: true,
   availableInChat: false,
+  availableInAnonymousChat: false,
   customerEmailParameter: null,
+  unused_mailboxId: 0,
 });
 
 export async function parseToolsFromOpenAPISpec(spec: string, apiToken: string): Promise<Tool[]> {

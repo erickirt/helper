@@ -10,7 +10,8 @@ vi.mock("@/lib/slack/client", () => ({
   getSlackUsersByEmail: vi.fn(),
 }));
 
-vi.mock("@/lib/data/user", () => ({
+vi.mock("@/lib/data/user", async (importOriginal) => ({
+  ...(await importOriginal()),
   getClerkUserList: vi.fn(),
 }));
 
@@ -23,7 +24,7 @@ describe("checkAssignedTicketResponseTimes", () => {
   });
 
   it("sends a Slack alert for overdue assigned tickets", async () => {
-    const { mailbox, user } = await userFactory.createRootUser({
+    const { user } = await userFactory.createRootUser({
       mailboxOverrides: {
         slackBotToken: "valid-token",
         slackAlertChannel: "channel-id",
@@ -32,7 +33,7 @@ describe("checkAssignedTicketResponseTimes", () => {
     });
 
     const overdueDate = subDays(now, 2);
-    await conversationFactory.create(mailbox.id, {
+    await conversationFactory.create({
       assignedToId: user.id,
       lastUserEmailCreatedAt: overdueDate,
       status: "open",
@@ -40,7 +41,7 @@ describe("checkAssignedTicketResponseTimes", () => {
 
     vi.mocked(getSlackUsersByEmail).mockResolvedValue(new Map([[user.email!, "SLACK123"]]));
 
-    await checkAssignedTicketResponseTimes();
+    await checkAssignedTicketResponseTimes(now);
 
     expect(postSlackMessage).toHaveBeenCalledWith(
       "valid-token",
@@ -61,7 +62,7 @@ describe("checkAssignedTicketResponseTimes", () => {
   });
 
   it("does not send a Slack alert for non-overdue assigned tickets", async () => {
-    const { mailbox, user } = await userFactory.createRootUser({
+    const { user } = await userFactory.createRootUser({
       mailboxOverrides: {
         slackBotToken: "valid-token",
         slackAlertChannel: "channel-id",
@@ -70,7 +71,7 @@ describe("checkAssignedTicketResponseTimes", () => {
     });
 
     const recentDate = subHours(now, 12); // Only 12 hours ago, under the 24 hour threshold
-    await conversationFactory.create(mailbox.id, {
+    await conversationFactory.create({
       assignedToId: user.id,
       lastUserEmailCreatedAt: recentDate,
       status: "open",
@@ -78,13 +79,13 @@ describe("checkAssignedTicketResponseTimes", () => {
 
     vi.mocked(getSlackUsersByEmail).mockResolvedValue(new Map([[user.email!, "SLACK123"]]));
 
-    await checkAssignedTicketResponseTimes();
+    await checkAssignedTicketResponseTimes(now);
 
     expect(postSlackMessage).not.toHaveBeenCalled();
   });
 
   it("does not send a Slack alert when notifications are disabled", async () => {
-    const { mailbox, user } = await userFactory.createRootUser({
+    const { user } = await userFactory.createRootUser({
       mailboxOverrides: {
         slackBotToken: "valid-token",
         slackAlertChannel: "channel-id",
@@ -95,7 +96,7 @@ describe("checkAssignedTicketResponseTimes", () => {
     });
 
     const overdueDate = subDays(now, 2);
-    await conversationFactory.create(mailbox.id, {
+    await conversationFactory.create({
       assignedToId: user.id,
       lastUserEmailCreatedAt: overdueDate,
       status: "open",

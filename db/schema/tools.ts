@@ -25,7 +25,9 @@ export const tools = pgTable(
     id: bigint({ mode: "number" }).primaryKey().generatedByDefaultAsIdentity(),
     name: text().notNull(),
     description: text().notNull(),
-    mailboxId: bigint({ mode: "number" }).notNull(),
+    unused_mailboxId: bigint("mailbox_id", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => 0),
     slug: text().notNull(),
     requestMethod: text().notNull().$type<ToolRequestMethod>(),
     url: text().notNull(),
@@ -36,10 +38,11 @@ export const tools = pgTable(
     toolApiId: bigint({ mode: "number" }),
     enabled: boolean().notNull().default(true),
     availableInChat: boolean().notNull().default(false),
+    availableInAnonymousChat: boolean().notNull().default(false),
     customerEmailParameter: text(),
   },
   (table) => [
-    index("tools_mailbox_id_idx").on(table.mailboxId),
+    index("tools_mailbox_id_idx").on(table.unused_mailboxId),
     index("tools_tool_api_id_idx").on(table.toolApiId),
     uniqueIndex("unique_slug_idx").on(table.slug),
   ],
@@ -47,7 +50,7 @@ export const tools = pgTable(
 
 export const toolsRelations = relations(tools, ({ one }) => ({
   mailbox: one(mailboxes, {
-    fields: [tools.mailboxId],
+    fields: [tools.unused_mailboxId],
     references: [mailboxes.id],
   }),
   toolApi: one(toolApis, {

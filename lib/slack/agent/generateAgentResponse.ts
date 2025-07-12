@@ -4,7 +4,8 @@ import { z } from "zod";
 import { getBaseUrl } from "@/components/constants";
 import { assertDefined } from "@/components/utils/assert";
 import { db } from "@/db/client";
-import { conversationMessages, conversations, DRAFT_STATUSES } from "@/db/schema";
+import { conversationMessages, conversations, DRAFT_STATUSES, userProfiles } from "@/db/schema";
+import { authUsers } from "@/db/supabaseSchema/auth";
 import { runAIQuery } from "@/lib/ai";
 import { getFullName } from "@/lib/auth/authUtils";
 import { Conversation, getConversationById, getConversationBySlug, updateConversation } from "@/lib/data/conversation";
@@ -25,8 +26,8 @@ const searchToolSchema = searchSchema.omit({
 });
 
 // Define the schema for filters separately
-const searchFiltersSchema = searchToolSchema.omit({ cursor: true, limit: true });
-type SearchFiltersInput = z.infer<typeof searchFiltersSchema>;
+const _searchFiltersSchema = searchToolSchema.omit({ cursor: true, limit: true });
+type SearchFiltersInput = z.infer<typeof _searchFiltersSchema>;
 
 export const generateAgentResponse = async (
   messages: CoreMessage[],
@@ -117,7 +118,15 @@ export const generateAgentResponse = async (
       parameters: z.object({}),
       execute: async () => {
         showStatus(`Checking members...`, { toolName: "getMembers", parameters: {} });
-        const members = await db.query.authUsers.findMany();
+        const members = await db
+          .select({
+            id: userProfiles.id,
+            displayName: userProfiles.displayName,
+            email: authUsers.email,
+          })
+          .from(userProfiles)
+          .innerJoin(authUsers, eq(userProfiles.id, authUsers.id));
+
         return members.map((member) => ({
           id: member.id,
           name: getFullName(member),
@@ -134,7 +143,7 @@ export const generateAgentResponse = async (
       }),
       execute: async ({ startDate, endDate }) => {
         showStatus(`Checking member stats...`, { toolName: "getMemberStats", parameters: { startDate, endDate } });
-        return await getMemberStats(mailbox, { startDate: new Date(startDate), endDate: new Date(endDate) });
+        return await getMemberStats({ startDate: new Date(startDate), endDate: new Date(endDate) });
       },
     }),
     searchTickets: tool({
@@ -147,9 +156,7 @@ export const generateAgentResponse = async (
           const { list } = await searchConversations(mailbox, input);
           const { results, nextCursor } = await list;
           return {
-            tickets: results.map((conversation) =>
-              formatConversation(conversation, mailbox, conversation.platformCustomer),
-            ),
+            tickets: results.map((conversation) => formatConversation(conversation, conversation.platformCustomer)),
             nextCursor,
           };
         } catch (error) {
@@ -202,10 +209,10 @@ export const generateAgentResponse = async (
       }),
       execute: async ({ id }) => {
         showStatus(`Checking ticket...`, { toolName: "getTicket", parameters: { id } });
-        const conversation = await findConversation(id, mailbox);
+        const conversation = await findConversation(id);
         if (!conversation) return { error: "Ticket not found" };
-        const platformCustomer = await getPlatformCustomer(mailbox.id, conversation.emailFrom ?? "");
-        return formatConversation(conversation, mailbox, platformCustomer);
+        const platformCustomer = await getPlatformCustomer(conversation.emailFrom ?? "");
+        return formatConversation(conversation, platformCustomer);
       },
     }),
     getTicketMessages: tool({
@@ -220,7 +227,7 @@ export const generateAgentResponse = async (
       }),
       execute: async ({ id }) => {
         showStatus(`Reading ticket...`, { toolName: "getTicketMessages", parameters: { id } });
-        const conversation = await findConversation(id, mailbox);
+        const conversation = await findConversation(id);
         if (!conversation) return { error: "Ticket not found" };
         const messages = await db.query.conversationMessages.findMany({
           where: and(
@@ -237,7 +244,15 @@ export const generateAgentResponse = async (
             role: true,
           },
         });
-        const members = await db.query.authUsers.findMany();
+        const members = await db
+          .select({
+            id: userProfiles.id,
+            displayName: userProfiles.displayName,
+            email: authUsers.email,
+          })
+          .from(userProfiles)
+          .innerJoin(authUsers, eq(userProfiles.id, authUsers.id));
+
         return messages.map((message) => ({
           id: message.id,
           content: message.cleanedUpText,
@@ -246,8 +261,7 @@ export const generateAgentResponse = async (
           sentBy:
             message.role === "user"
               ? message.emailFrom
-              : getFullName(members.find((member) => member.id === message.userId)!),
-          userId: message.userId,
+              : getFullName(members.find((m) => m.id === message.userId) ?? { displayName: null, email: null }),
         }));
       },
     }),
@@ -313,8 +327,8 @@ export const generateAgentResponse = async (
         showStatus(`Searching knowledge base...`, { toolName: "searchKnowledgeBase", parameters: { query } });
         try {
           const [websitePages, knowledgeBank] = await Promise.all([
-            findSimilarWebsitePages(query, mailbox),
-            findEnabledKnowledgeBankEntries(mailbox),
+            findSimilarWebsitePages(query),
+            findEnabledKnowledgeBankEntries(),
           ]);
           if (websitePages.length === 0 && knowledgeBank.length === 0) {
             return { message: "No relevant website pages found for this query" };
@@ -341,7 +355,7 @@ export const generateAgentResponse = async (
       }),
       execute: async ({ ticketId }) => {
         showStatus(`Sending reply...`, { toolName: "sendReply", parameters: { ticketId } });
-        const conversation = await findConversation(ticketId, mailbox);
+        const conversation = await findConversation(ticketId);
         if (!conversation) return { error: "Ticket not found" };
         await createReply({
           conversationId: conversation.id,
@@ -427,11 +441,10 @@ If asked to do something inappropriate, harmful, or outside your capabilities, p
   };
 };
 
-const findConversation = async (id: string | number, mailbox: Mailbox) => {
+const findConversation = async (id: string | number) => {
   const conversation = /^\d+$/.test(id.toString())
     ? await getConversationById(Number(id))
     : await getConversationBySlug(id.toString());
-  if (!conversation || conversation.mailboxId !== mailbox.id) return null;
   return conversation;
 };
 
@@ -440,11 +453,10 @@ const formatConversation = (
     Conversation,
     "id" | "slug" | "subject" | "status" | "emailFrom" | "lastUserEmailCreatedAt" | "assignedToId" | "assignedToAI"
   >,
-  mailbox: Mailbox,
   platformCustomer?: PlatformCustomer | null,
 ) => {
   return {
-    standardSlackFormat: `*<${getBaseUrl()}/mailboxes/${mailbox.slug}/conversations?id=${conversation.slug}|${conversation.subject}>*\n${conversation.emailFrom ?? "Anonymous"}`,
+    standardSlackFormat: `*<${getBaseUrl()}/conversations?id=${conversation.slug}|${conversation.subject}>*\n${conversation.emailFrom ?? "Anonymous"}`,
     id: conversation.id,
     slug: conversation.slug,
     subject: conversation.subject,
@@ -454,6 +466,6 @@ const formatConversation = (
     assignedToUserId: conversation.assignedToId,
     assignedToAI: conversation.assignedToAI,
     isVip: platformCustomer?.isVip || false,
-    url: `${getBaseUrl()}/mailboxes/${mailbox.slug}/conversations?id=${conversation.slug}`,
+    url: `${getBaseUrl()}/conversations?id=${conversation.slug}`,
   };
 };

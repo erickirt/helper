@@ -39,7 +39,7 @@ describe("filesRouter", () => {
   describe("initiateUpload", () => {
     it("creates a file entry and returns a signed URL for inline files", async () => {
       const { user } = await userFactory.createRootUser();
-      const ctx = createTestTRPCContext(user);
+      const ctx = await createTestTRPCContext(user);
       const caller = createCaller(ctx);
 
       const result = await caller.mailbox.conversations.files.initiateUpload({
@@ -63,9 +63,9 @@ describe("filesRouter", () => {
     });
 
     it("uses private bucket for non-inline files", async () => {
-      const { user, mailbox } = await userFactory.createRootUser();
-      const { conversation } = await conversationFactory.create(mailbox.id);
-      const ctx = createTestTRPCContext(user);
+      const { user } = await userFactory.createRootUser();
+      const { conversation } = await conversationFactory.create();
+      const ctx = await createTestTRPCContext(user);
       const caller = createCaller(ctx);
 
       const result = await caller.mailbox.conversations.files.initiateUpload({
