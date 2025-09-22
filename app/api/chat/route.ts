@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { ReadPageToolConfig } from "@helperai/sdk";
 import { corsOptions, corsResponse, withWidgetAuth } from "@/app/api/widget/utils";
 import { db } from "@/db/client";
-import { conversations } from "@/db/schema";
+import { conversations, mailboxes } from "@/db/schema";
 import { createUserMessage, respondWithAI } from "@/lib/ai/chat";
 import {
   CHAT_CONVERSATION_SUBJECT,
@@ -32,6 +32,7 @@ interface ChatRequestBody {
   tools?: Record<string, ToolRequestBody>;
   customerSpecificTools?: boolean;
   customerInfoUrl?: string | null;
+  customerSpecificInfoUrl?: boolean;
 }
 
 const getConversation = async (conversationSlug: string, session: WidgetSessionPayload) => {
@@ -64,7 +65,12 @@ export const POST = withWidgetAuth(async ({ request }, { session, mailbox }) => 
     tools,
     customerSpecificTools,
     customerInfoUrl,
+    customerSpecificInfoUrl,
   }: ChatRequestBody = await request.json();
+
+  if (customerInfoUrl && !customerSpecificInfoUrl) {
+    await db.update(mailboxes).set({ customerInfoUrl }).where(eq(mailboxes.id, mailbox.id));
+  }
 
   Sentry.setTag("conversation_slug", conversationSlug);
 
