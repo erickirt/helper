@@ -10,6 +10,7 @@ import {
   Bot,
   Download,
   Frown,
+  Info,
   Mail,
   MessageSquare,
   MoreHorizontal,
@@ -21,7 +22,6 @@ import {
   ThumbsUp,
   Trash2,
   User,
-  XCircle,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -378,9 +378,9 @@ const MessageItem = ({
                 )}
               </div>
               {message.type === "message" && message.status === "failed" && (
-                <div className="align-center flex items-center justify-center gap-0.5 text-sm text-destructive">
-                  <XCircle className="h-4 w-4" />
-                  <span>Message failed to send</span>
+                <div className="align-center flex items-center justify-center gap-0.5 text-sm text-muted">
+                  <Info className="h-4 w-4" />
+                  <span>Email failed to send</span>
                 </div>
               )}
               {message.type === "message" && message.role === "ai_assistant" && (
