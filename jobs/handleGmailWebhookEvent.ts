@@ -12,6 +12,7 @@ import { assertDefined } from "@/components/utils/assert";
 import { db } from "@/db/client";
 import {
   BasicUserProfile,
+  conversationEvents,
   conversationMessages,
   conversations,
   files,
@@ -183,7 +184,7 @@ export const handleGmailWebhookEvent = async ({ body, headers }: any) => {
   const results: {
     message: string;
     responded?: boolean;
-    isAutomatedResponseOrThankYou?: boolean;
+    ignoreReason?: string;
     gmailMessageId?: string;
     gmailThreadId?: string;
     messageId?: number;
@@ -237,26 +238,27 @@ export const handleGmailWebhookEvent = async ({ body, headers }: any) => {
       const staffUser = await getBasicProfileByEmail(parsedEmailFrom.address);
       const isFirstMessage = isNewThread(gmailMessageId, gmailThreadId);
 
-      let shouldIgnore =
-        (!!staffUser && !isFirstMessage) ||
-        labelIds.some((id) => IGNORED_GMAIL_CATEGORIES.includes(id)) ||
-        matchesTransactionalEmailAddress(parsedEmailFrom.address);
-
-      let isAutomatedResponseOrThankYou: boolean | undefined;
-      if (!shouldIgnore) {
-        isAutomatedResponseOrThankYou = await isThankYouOrAutoResponse(mailbox, cleanedUpText);
-        shouldIgnore = isAutomatedResponseOrThankYou;
+      let ignoreReason: string | undefined;
+      if (!!staffUser && !isFirstMessage) {
+        ignoreReason = "Message is from staff";
+      } else if (labelIds.some((id) => IGNORED_GMAIL_CATEGORIES.includes(id))) {
+        ignoreReason = `Message is in an ignored category (${labelIds.filter((id) => IGNORED_GMAIL_CATEGORIES.includes(id)).join(", ")})`;
+      } else if (matchesTransactionalEmailAddress(parsedEmailFrom.address)) {
+        ignoreReason = `Email address is transactional (${parsedEmailFrom.address})`;
+      } else {
+        const isAutomatedResponseOrThankYou = await isThankYouOrAutoResponse(mailbox, cleanedUpText);
+        if (isAutomatedResponseOrThankYou) ignoreReason = "Message is an automated response or thank you";
       }
 
-      const createNewConversation = async () => {
-        return await db
+      const createNewConversation = () =>
+        db
           .insert(conversations)
           .values({
             emailFrom: parsedEmailFrom.address,
             emailFromName: parsedEmailFrom.name,
             subject: parsedEmail.subject,
-            status: shouldIgnore ? "closed" : "open",
-            closedAt: shouldIgnore ? new Date() : null,
+            status: ignoreReason ? "closed" : "open",
+            closedAt: ignoreReason ? new Date() : null,
             conversationProvider: "gmail",
             source: "email",
             isPrompt: false,
@@ -271,7 +273,6 @@ export const handleGmailWebhookEvent = async ({ body, headers }: any) => {
             assignedToAI: conversations.assignedToAI,
           })
           .then(takeUniqueOrThrow);
-      };
 
       let conversation;
       if (isNewThread(gmailMessageId, gmailThreadId)) {
@@ -310,12 +311,19 @@ export const handleGmailWebhookEvent = async ({ body, headers }: any) => {
       if (
         conversation.status === "closed" &&
         (!conversation.assignedToAI || mailbox.preferences?.autoRespondEmailToChat === "draft") &&
-        !shouldIgnore
+        !ignoreReason
       ) {
-        await updateConversation(conversation.id, { set: { status: "open" } });
+        await updateConversation(conversation.id, { set: { status: "open" }, message: "Email received" });
       }
 
-      if (!shouldIgnore) {
+      if (ignoreReason) {
+        await db.insert(conversationEvents).values({
+          conversationId: conversation.id,
+          type: "email_auto_ignored",
+          changes: { status: "closed" },
+          reason: ignoreReason,
+        });
+      } else {
         await triggerEvent("conversations/auto-response.create", {
           messageId: newEmail.id,
           customerInfoUrl: mailbox.customerInfoUrl,
@@ -326,8 +334,8 @@ export const handleGmailWebhookEvent = async ({ body, headers }: any) => {
         message: `Created message ${newEmail.id}`,
         messageId: newEmail.id,
         conversationSlug: conversation.slug,
-        responded: !shouldIgnore,
-        isAutomatedResponseOrThankYou,
+        responded: !ignoreReason,
+        ignoreReason,
         gmailMessageId,
         gmailThreadId,
       });
